@@ -98,7 +98,8 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
         mLastFrameNumberReceived(0),
         mUpdateTexImageFailed(false),
         mAutoRefresh(false),
-        mFreezePositionUpdates(false)
+        mFreezePositionUpdates(false),
+        mTransformHint(0)
 {
 #ifdef USE_HWC2
     ALOGV("Creating Layer %s", name.string());
@@ -132,10 +133,12 @@ Layer::Layer(SurfaceFlinger* flinger, const sp<Client>& client,
 #else
     mCurrentState.alpha = 0xFF;
 #endif
+    mCurrentState.blur = 0xFF;
     mCurrentState.layerStack = 0;
     mCurrentState.flags = layerFlags;
     mCurrentState.sequence = 0;
     mCurrentState.requested = mCurrentState.active;
+    mCurrentState.color = 0;
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
@@ -366,7 +369,7 @@ Rect Layer::getContentCrop() const {
     return crop;
 }
 
-static Rect reduce(const Rect& win, const Region& exclude) {
+Rect Layer::reduce(const Rect& win, const Region& exclude) const{
     if (CC_LIKELY(exclude.isEmpty())) {
         return win;
     }
@@ -626,6 +629,7 @@ void Layer::setGeometry(
     }
     const Transform& tr(hw->getTransform());
     layer.setFrame(tr.transform(frame));
+    setPosition(hw, layer, s);
     layer.setCrop(computeCrop(hw));
     layer.setPlaneAlpha(s.alpha);
 #endif
@@ -732,6 +736,13 @@ void Layer::setPerFrameData(const sp<const DisplayDevice>& displayDevice) {
             (mActiveBuffer != nullptr && mActiveBuffer->handle == nullptr)) {
         ALOGV("[%s] Requesting Client composition", mName.string());
         setCompositionType(hwcId, HWC2::Composition::Client);
+#ifndef USE_HWC2
+        error = hwcLayer->setBuffer(nullptr, Fence::NO_FENCE);
+        if (error != HWC2::Error::None) {
+            ALOGE("[%s] Failed to set null buffer: %s (%d)", mName.string(),
+                    to_string(error).c_str(), static_cast<int32_t>(error));
+        }
+#endif
         return;
     }
 
@@ -849,6 +860,7 @@ void Layer::setAcquireFence(const sp<const DisplayDevice>& /* hw */,
             }
         }
     }
+    setAcquiredFenceIfBlit(fenceFd, layer);
     layer.setAcquireFenceFd(fenceFd);
 }
 
@@ -880,21 +892,21 @@ Rect Layer::getPosition(
 // drawing...
 // ---------------------------------------------------------------------------
 
-void Layer::draw(const sp<const DisplayDevice>& hw, const Region& clip) const {
+void Layer::draw(const sp<const DisplayDevice>& hw, const Region& clip) {
     onDraw(hw, clip, false);
 }
 
 void Layer::draw(const sp<const DisplayDevice>& hw,
-        bool useIdentityTransform) const {
+        bool useIdentityTransform) {
     onDraw(hw, Region(hw->bounds()), useIdentityTransform);
 }
 
-void Layer::draw(const sp<const DisplayDevice>& hw) const {
+void Layer::draw(const sp<const DisplayDevice>& hw) {
     onDraw(hw, Region(hw->bounds()), false);
 }
 
 void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
-        bool useIdentityTransform) const
+        bool useIdentityTransform)
 {
     ATRACE_CALL();
 
@@ -939,7 +951,8 @@ void Layer::onDraw(const sp<const DisplayDevice>& hw, const Region& clip,
 
     RenderEngine& engine(mFlinger->getRenderEngine());
 
-    if (!blackOutLayer) {
+    if (!blackOutLayer ||
+            ((hw->getDisplayType() == HWC_DISPLAY_PRIMARY) && canAllowGPUForProtected())) {
         // TODO: we could be more subtle with isFixedSize()
         const bool useFiltering = getFiltering() || needsFiltering(hw) || isFixedSize();
 
@@ -1007,6 +1020,16 @@ void Layer::clearWithOpenGL(
     clearWithOpenGL(hw, clip, 0,0,0,0);
 }
 
+void Layer::handleOpenGLDraw(const sp<const DisplayDevice>& /* hw */,
+            Mesh& mesh) const {
+    const State& s(getDrawingState());
+    RenderEngine& engine(mFlinger->getRenderEngine());
+
+    engine.setupLayerBlending(mPremultipliedAlpha, isOpaque(s), s.alpha);
+    engine.drawMesh(mesh);
+    engine.disableBlending();
+}
+
 void Layer::drawWithOpenGL(const sp<const DisplayDevice>& hw,
         const Region& /* clip */, bool useIdentityTransform) const {
     const State& s(getDrawingState());
@@ -1053,10 +1076,7 @@ void Layer::drawWithOpenGL(const sp<const DisplayDevice>& hw,
     texCoords[2] = vec2(right, 1.0f - bottom);
     texCoords[3] = vec2(right, 1.0f - top);
 
-    RenderEngine& engine(mFlinger->getRenderEngine());
-    engine.setupLayerBlending(mPremultipliedAlpha, isOpaque(s), s.alpha);
-    engine.drawMesh(mMesh);
-    engine.disableBlending();
+    handleOpenGLDraw(hw, mMesh);
 }
 
 #ifdef USE_HWC2
@@ -1599,6 +1619,14 @@ bool Layer::setLayer(uint32_t z) {
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
+bool Layer::setBlur(uint8_t blur) {
+    if (mCurrentState.blur == blur)
+        return false;
+    mCurrentState.sequence++;
+    mCurrentState.blur = blur;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
 bool Layer::setSize(uint32_t w, uint32_t h) {
     if (mCurrentState.requested.w == w && mCurrentState.requested.h == h)
         return false;
@@ -1673,6 +1701,16 @@ bool Layer::setOverrideScalingMode(int32_t scalingMode) {
     if (scalingMode == mOverrideScalingMode)
         return false;
     mOverrideScalingMode = scalingMode;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
+bool Layer::setColor(uint32_t color) {
+    if (mCurrentState.color == color)
+        return false;
+    mCurrentState.sequence++;
+    mCurrentState.color = color;
+    mCurrentState.modified = true;
     setTransactionFlags(eTransactionNeeded);
     return true;
 }
@@ -2056,9 +2094,14 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
 
             // Remove any stale buffers that have been dropped during
             // updateTexImage
-            while (mQueueItems[0].mFrameNumber != currentFrameNumber) {
+            while ((mQueuedFrames > 0) && (mQueueItems[0].mFrameNumber != currentFrameNumber)) {
                 mQueueItems.removeAt(0);
                 android_atomic_dec(&mQueuedFrames);
+            }
+
+            if (mQueuedFrames == 0) {
+                ALOGE("[%s] mQueuedFrames is zero !!", mName.string());
+                return outDirtyRegion;
             }
 
             mQueueItems.removeAt(0);
@@ -2167,7 +2210,7 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const
     return usage;
 }
 
-void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) const {
+void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) {
     uint32_t orientation = 0;
     if (!mFlinger->mDebugDisableTransformHint) {
         // The transform hint is used to improve performance, but we can
@@ -2180,6 +2223,7 @@ void Layer::updateTransformHint(const sp<const DisplayDevice>& hw) const {
         }
     }
     mSurfaceFlingerConsumer->setTransformHint(orientation);
+    mTransformHint = orientation;
 }
 
 // ----------------------------------------------------------------------------
@@ -2206,9 +2250,9 @@ void Layer::dump(String8& result, Colorizer& colorizer) const
             "crop=(%4d,%4d,%4d,%4d), finalCrop=(%4d,%4d,%4d,%4d), "
             "isOpaque=%1d, invalidate=%1d, "
 #ifdef USE_HWC2
-            "alpha=%.3f, flags=0x%08x, tr=[%.2f, %.2f][%.2f, %.2f]\n"
+            "alpha=%.3f, blur=0x%02x, flags=0x%08x, tr=[%.2f, %.2f][%.2f, %.2f]\n"
 #else
-            "alpha=0x%02x, flags=0x%08x, tr=[%.2f, %.2f][%.2f, %.2f]\n"
+            "alpha=0x%02x, blur=0x%02x, flags=0x%08x, tr=[%.2f, %.2f][%.2f, %.2f]\n"
 #endif
             "      client=%p\n",
             s.layerStack, s.z, s.active.transform.tx(), s.active.transform.ty(), s.active.w, s.active.h,
@@ -2217,7 +2261,7 @@ void Layer::dump(String8& result, Colorizer& colorizer) const
             s.finalCrop.left, s.finalCrop.top,
             s.finalCrop.right, s.finalCrop.bottom,
             isOpaque(s), contentDirty,
-            s.alpha, s.flags,
+            s.alpha, s.blur, s.flags,
             s.active.transform[0][0], s.active.transform[0][1],
             s.active.transform[1][0], s.active.transform[1][1],
             client.get());

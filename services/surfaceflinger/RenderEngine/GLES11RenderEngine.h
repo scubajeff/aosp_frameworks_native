@@ -57,16 +57,20 @@ protected:
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque,
             float alpha) override;
     virtual void setupDimLayerBlending(float alpha) override;
+    virtual void setupDimLayerBlendingWithColor(uint32_t color, float alpha) override;
 #else
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque,
             int alpha);
     virtual void setupDimLayerBlending(int alpha);
+    virtual void setupDimLayerBlendingWithColor(uint32_t color, int alpha);
 #endif
     virtual void setupLayerTexturing(const Texture& texture);
     virtual void setupLayerBlackedOut();
     virtual void setupFillWithColor(float r, float g, float b, float a) ;
     virtual void disableTexturing();
     virtual void disableBlending();
+    virtual void setupLayerMasking(const Texture& /*maskTexture*/, float /*alphaThreshold*/) {}
+    virtual void disableLayerMasking() {}
 
     virtual void drawMesh(const Mesh& mesh);
 

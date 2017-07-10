@@ -92,14 +92,29 @@ void GLES11RenderEngine::setViewportAndProjection(
         case Transform::ROT_0:
             break;
         case Transform::ROT_90:
-            glRotatef(90, 0, 0, 1);
-            break;
-        case Transform::ROT_180:
-            glRotatef(180, 0, 0, 1);
-            break;
-        case Transform::ROT_270:
+        {
+            float x1 = (l+r)/2;
+            float y1 = (t+b)/2;
+            glTranslatef(x1-y1, x1+y1, 0);
             glRotatef(270, 0, 0, 1);
             break;
+        }
+        case Transform::ROT_180:
+        {
+            float x1 = (l+r)/2;
+            float y1 = (t+b)/2;
+            glTranslatef(x1*2, y1*2, 0);
+            glRotatef(180, 0, 0, 1);
+            break;
+        }
+        case Transform::ROT_270:
+        {
+            float x1 = (l+r)/2;
+            float y1 = (t+b)/2;
+            glTranslatef(x1+y1, y1-x1, 0);
+            glRotatef(90, 0, 0, 1);
+            break;
+        }
         default:
             break;
     }
@@ -199,6 +214,36 @@ void GLES11RenderEngine::setupDimLayerBlending(int alpha) {
     glColor4f(0, 0, 0, alpha);
 #else
     glColor4f(0, 0, 0, alpha/255.0f);
+#endif
+}
+
+#ifdef USE_HWC2
+void GLES11RenderEngine::setupDimLayerBlendingWithColor(uint32_t color, float alpha) {
+#else
+void GLES11RenderEngine::setupDimLayerBlendingWithColor(uint32_t color, int alpha) {
+#endif
+    // SF Client sets the color on Dim Layer in RGBA format
+    float r = float((color & 0xFF000000) >> 24);
+    float g = float((color & 0x00FF0000) >> 16);
+    float b = float((color & 0x0000FF00) >> 8);
+    float a = float(color & 0x000000FF);
+
+    glDisable(GL_TEXTURE_EXTERNAL_OES);
+    glDisable(GL_TEXTURE_2D);
+#ifdef USE_HWC2
+    if (alpha == 1.0f) {
+#else
+    if (alpha == 0xFF) {
+#endif
+        glDisable(GL_BLEND);
+    } else {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
+#ifdef USE_HWC2
+    glColor4f(r, g, b, (a / 255.0f) * alpha);
+#else
+    glColor4f(r, g, b, (a / 255.0f) * (alpha / 255.0f));
 #endif
 }
 

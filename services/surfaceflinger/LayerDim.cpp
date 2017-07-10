@@ -44,14 +44,18 @@ LayerDim::~LayerDim() {
 }
 
 void LayerDim::onDraw(const sp<const DisplayDevice>& hw,
-        const Region& /* clip */, bool useIdentityTransform) const
+        const Region& /* clip */, bool useIdentityTransform)
 {
     const State& s(getDrawingState());
     if (s.alpha>0) {
         Mesh mesh(Mesh::TRIANGLE_FAN, 4, 2);
         computeGeometry(hw, mesh, useIdentityTransform);
         RenderEngine& engine(mFlinger->getRenderEngine());
-        engine.setupDimLayerBlending(s.alpha);
+        if (!s.color) {
+          engine.setupDimLayerBlending(s.alpha);
+        } else {
+          engine.setupDimLayerBlendingWithColor(s.color, s.alpha);
+        }
         engine.drawMesh(mesh);
         engine.disableBlending();
     }

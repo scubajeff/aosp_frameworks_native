@@ -146,6 +146,14 @@ public:
             uint32_t w, uint32_t h);
     status_t setLayer(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
             uint32_t z);
+    status_t setBlur(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
+            float blur);
+    status_t setBlurMaskSurface(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
+            const sp<IBinder>& maskSurfaceId);
+    status_t setBlurMaskSampling(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
+            uint32_t blurMaskSampling);
+    status_t setBlurMaskAlphaThreshold(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
+            float alpha);
     status_t setFlags(const sp<SurfaceComposerClient>& client, const sp<IBinder>& id,
             uint32_t flags, uint32_t mask);
     status_t setTransparentRegionHint(
@@ -169,6 +177,8 @@ public:
             const sp<IBinder>& id, int32_t overrideScalingMode);
     status_t setGeometryAppliesWithResize(const sp<SurfaceComposerClient>& client,
             const sp<IBinder>& id);
+    status_t setColor(const sp<SurfaceComposerClient>& client,
+            const sp<IBinder>& id, uint32_t color);
 
     status_t setDisplaySurface(const sp<IBinder>& token,
             sp<IGraphicBufferProducer> bufferProducer);
@@ -314,6 +324,50 @@ status_t Composer::setLayer(const sp<SurfaceComposerClient>& client,
     return NO_ERROR;
 }
 
+status_t Composer::setBlur(const sp<SurfaceComposerClient>& client,
+        const sp<IBinder>& id, float blur) {
+    Mutex::Autolock _l(mLock);
+    layer_state_t* s = getLayerStateLocked(client, id);
+    if (!s)
+        return BAD_INDEX;
+    s->what |= layer_state_t::eBlurChanged;
+    s->blur = blur;
+    return NO_ERROR;
+}
+
+status_t Composer::setBlurMaskSurface(const sp<SurfaceComposerClient>& client,
+        const sp<IBinder>& id, const sp<IBinder>& maskSurfaceId) {
+    Mutex::Autolock _l(mLock);
+    layer_state_t* s = getLayerStateLocked(client, id);
+    if (!s)
+        return BAD_INDEX;
+    s->what |= layer_state_t::eBlurMaskSurfaceChanged;
+    s->blurMaskSurface = maskSurfaceId;
+    return NO_ERROR;
+}
+
+status_t Composer::setBlurMaskSampling(const sp<SurfaceComposerClient>& client,
+        const sp<IBinder>& id, uint32_t blurMaskSampling) {
+    Mutex::Autolock _l(mLock);
+    layer_state_t* s = getLayerStateLocked(client, id);
+    if (!s)
+        return BAD_INDEX;
+    s->what |= layer_state_t::eBlurMaskSamplingChanged;
+    s->blurMaskSampling = blurMaskSampling;
+    return NO_ERROR;
+}
+
+status_t Composer::setBlurMaskAlphaThreshold(const sp<SurfaceComposerClient>& client,
+        const sp<IBinder>& id, float alpha) {
+    Mutex::Autolock _l(mLock);
+    layer_state_t* s = getLayerStateLocked(client, id);
+    if (!s)
+        return BAD_INDEX;
+    s->what |= layer_state_t::eBlurMaskAlphaThresholdChanged;
+    s->blurMaskAlphaThreshold = alpha;
+    return NO_ERROR;
+}
+
 status_t Composer::setFlags(const sp<SurfaceComposerClient>& client,
         const sp<IBinder>& id, uint32_t flags,
         uint32_t mask) {
@@ -456,6 +510,17 @@ status_t Composer::setGeometryAppliesWithResize(
         return BAD_INDEX;
     }
     s->what |= layer_state_t::eGeometryAppliesWithResize;
+    return NO_ERROR;
+}
+
+status_t Composer::setColor(const sp<SurfaceComposerClient>& client,
+        const sp<IBinder>& id, uint32_t color) {
+    Mutex::Autolock _l(mLock);
+    layer_state_t* s = getLayerStateLocked(client, id);
+    if (!s)
+        return BAD_INDEX;
+    s->what |= layer_state_t::eColorChanged;
+    s->color = color;
     return NO_ERROR;
 }
 
@@ -675,6 +740,22 @@ status_t SurfaceComposerClient::setLayer(const sp<IBinder>& id, uint32_t z) {
     return getComposer().setLayer(this, id, z);
 }
 
+status_t SurfaceComposerClient::setBlur(const sp<IBinder>& id, float blur) {
+    return getComposer().setBlur(this, id, blur);
+}
+
+status_t SurfaceComposerClient::setBlurMaskSurface(const sp<IBinder>& id, const sp<IBinder>& maskSurfaceId) {
+    return getComposer().setBlurMaskSurface(this, id, maskSurfaceId);
+}
+
+status_t SurfaceComposerClient::setBlurMaskSampling(const sp<IBinder>& id, uint32_t blurMaskSampling) {
+    return getComposer().setBlurMaskSampling(this, id, blurMaskSampling);
+}
+
+status_t SurfaceComposerClient::setBlurMaskAlphaThreshold(const sp<IBinder>& id, float alpha) {
+    return getComposer().setBlurMaskAlphaThreshold(this, id, alpha);
+}
+
 status_t SurfaceComposerClient::hide(const sp<IBinder>& id) {
     return getComposer().setFlags(this, id,
             layer_state_t::eLayerHidden,
@@ -724,6 +805,10 @@ status_t SurfaceComposerClient::setOverrideScalingMode(
 status_t SurfaceComposerClient::setGeometryAppliesWithResize(
         const sp<IBinder>& id) {
     return getComposer().setGeometryAppliesWithResize(this, id);
+}
+
+status_t SurfaceComposerClient::setColor(const sp<IBinder>& id, uint32_t color) {
+    return getComposer().setColor(this, id, color);
 }
 
 // ----------------------------------------------------------------------------

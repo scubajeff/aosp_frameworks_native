@@ -60,6 +60,8 @@
 #include "DisplayHardware/HWComposer.h"
 #include "Effects/Daltonizer.h"
 
+#include "FrameRateHelper.h"
+
 #include <map>
 #include <string>
 
@@ -73,6 +75,7 @@ class EventThread;
 class IGraphicBufferAlloc;
 class Layer;
 class LayerDim;
+class LayerBlur;
 class Surface;
 class RenderEngine;
 class EventControlThread;
@@ -149,7 +152,9 @@ private:
     friend class Client;
     friend class DisplayEventConnection;
     friend class Layer;
+    friend class LayerDim;
     friend class MonitoredProducer;
+    friend class LayerBlur;
 
     // This value is specified in number of frames.  Log frame stats at most
     // every half hour.
@@ -256,6 +261,47 @@ private:
     virtual void onHotplugReceived(int disp, bool connected);
 
     /* ------------------------------------------------------------------------
+     * Extensions
+     */
+    virtual void updateExtendedMode() { }
+
+    virtual void getIndexLOI(size_t /*dpy*/,
+                     const LayerVector& /*currentLayers*/,
+                     bool& /*bIgnoreLayers*/,
+                     int& /*indexLOI*/) { }
+
+    virtual void delayDPTransactionIfNeeded(
+                     const Vector<DisplayState>& /*displays*/) { }
+
+
+
+    virtual void isfreezeSurfacePresent(
+                     bool& freezeSurfacePresent,
+                     const sp<const DisplayDevice>& /*hw*/,
+                     const int32_t& /*id*/) { freezeSurfacePresent = false; }
+
+    virtual void updateVisibleRegionsDirty() { }
+#ifndef USE_HWC2
+    virtual void setOrientationEventControl(
+                     bool& /*freezeSurfacePresent*/,
+                     const int32_t& /*id*/) { }
+    virtual bool canDrawLayerinScreenShot(
+                     const sp<const DisplayDevice>& hw,
+                     const sp<Layer>& layer);
+
+    virtual bool updateLayerVisibleNonTransparentRegion(
+                     const int& dpy, const sp<Layer>& layer,
+                     bool& bIgnoreLayers, int& indexLOI,
+                     uint32_t layerStack, const int& i);
+
+    virtual void  drawWormHoleIfRequired(HWComposer::LayerListIterator &cur,
+                     const HWComposer::LayerListIterator &end,
+                     const sp<const DisplayDevice>& hw,
+                     const Region& region);
+#endif
+    virtual bool isS3DLayerPresent(const sp<const DisplayDevice>& /*hw*/)
+        { return false; };
+    /* ------------------------------------------------------------------------
      * Message handling
      */
     void waitForEvent();
@@ -315,6 +361,10 @@ private:
             sp<Layer>* outLayer);
 
     status_t createDimLayer(const sp<Client>& client, const String8& name,
+            uint32_t w, uint32_t h, uint32_t flags, sp<IBinder>* outHandle,
+            sp<IGraphicBufferProducer>* outGbp, sp<Layer>* outLayer);
+
+    status_t createBlurLayer(const sp<Client>& client, const String8& name,
             uint32_t w, uint32_t h, uint32_t flags, sp<IBinder>* outHandle,
             sp<IGraphicBufferProducer>* outGbp, sp<Layer>* outLayer);
 
@@ -413,7 +463,7 @@ private:
      * Compositing
      */
     void invalidateHwcGeometry();
-    static void computeVisibleRegions(
+    void computeVisibleRegions(size_t dpy,
             const LayerVector& currentLayers, uint32_t layerStack,
             Region& dirtyRegion, Region& opaqueRegion);
 
@@ -462,6 +512,7 @@ private:
     void logFrameStats();
 
     void dumpStaticScreenStats(String8& result) const;
+    virtual void dumpDrawCycle(bool /* prePrepare */ ) { }
 
     void recordBufferingStats(const char* layerName,
             std::vector<OccupancyTracker::Segment>&& history);
@@ -566,6 +617,9 @@ private:
     mat4 mColorMatrix;
     bool mHasColorMatrix;
 
+    mat4 mSecondaryColorMatrix;
+    bool mHasSecondaryColorMatrix;
+
     // Static screen stats
     bool mHasPoweredOff;
     static const size_t NUM_BUCKETS = 8; // < 1-7, 7+
@@ -595,6 +649,16 @@ private:
     };
     mutable Mutex mBufferingStatsMutex;
     std::unordered_map<std::string, BufferingStats> mBufferingStats;
+
+    FrameRateHelper mFrameRateHelper;
+
+    /*
+     * A number that increases on every new frame composition and screen capture.
+     * LayerBlur can speed up it's drawing by caching texture using this variable
+     * if multiple LayerBlur objects draw in one frame composition.
+     * In case of display mirroring, this variable should be increased on every display.
+     */
+    uint32_t mActiveFrameSequence;
 };
 
 }; // namespace android

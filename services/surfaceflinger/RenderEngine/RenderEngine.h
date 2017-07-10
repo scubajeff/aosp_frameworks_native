@@ -99,9 +99,11 @@ public:
 #ifdef USE_HWC2
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque, float alpha) = 0;
     virtual void setupDimLayerBlending(float alpha) = 0;
+    virtual void setupDimLayerBlendingWithColor(uint32_t color, float alpha) = 0;
 #else
     virtual void setupLayerBlending(bool premultipliedAlpha, bool opaque, int alpha) = 0;
     virtual void setupDimLayerBlending(int alpha) = 0;
+    virtual void setupDimLayerBlendingWithColor(uint32_t color, int alpha) = 0;
 #endif
     virtual void setupLayerTexturing(const Texture& texture) = 0;
     virtual void setupLayerBlackedOut() = 0;
@@ -113,6 +115,8 @@ public:
 
     virtual void disableTexturing() = 0;
     virtual void disableBlending() = 0;
+    virtual void setupLayerMasking(const Texture& maskTexture, float alphaThreshold) = 0;
+    virtual void disableLayerMasking() = 0;
 
     // drawing
     virtual void drawMesh(const Mesh& mesh) = 0;
@@ -120,6 +124,11 @@ public:
     // queries
     virtual size_t getMaxTextureSize() const = 0;
     virtual size_t getMaxViewportDims() const = 0;
+    virtual bool getProjectionYSwap() { return 0; }
+    virtual size_t getViewportWidth() const { return 1; }
+    virtual size_t getViewportHeight() const { return 1; }
+    virtual Rect getProjectionSourceCrop() const { return Rect(0, 0, 1, 1); }
+    virtual Transform::orientation_flags getProjectionRotation() const { return Transform::ROT_0; }
 
     EGLConfig getEGLConfig() const;
     EGLContext getEGLContext() const;
